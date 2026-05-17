@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>身份证照片处理工具</title>
+    <style>
+        *{margin:0;padding:0;box-sizing:border-box}
+        body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f0f2f5;color:#333;min-height:100vh;padding:16px}
+        .container{max-width:600px;margin:0 auto}
+        h1{text-align:center;font-size:1.4em;margin:12px 0 4px}
+        .subtitle{text-align:center;color:#888;font-size:.85em;margin-bottom:16px}
+        .card{background:#fff;border-radius:12px;padding:16px;margin-bottom:12px;box-shadow:0 1px 4px rgba(0,0,0,.08)}
+        .card h2{font-size:1em;margin-bottom:12px;color:#555}
+        .upload-area{border:2px dashed #ccc;border-radius:10px;padding:24px 16px;text-align:center;cursor:pointer;transition:all .2s}
+        .upload-area:active{border-color:#4a90d9;background:#f8faff}
+        .upload-area input{display:none}
+        .upload-area .icon{font-size:2em;margin-bottom:6px}
+        .upload-area .text{color:#888;font-size:.9em}
+        .upload-area .preview{max-width:100%;max-height:200px;border-radius:6px;margin-top:8px}
+        .upload-area.done{border-color:#52c41a;border-style:solid}
+        .btn{display:block;width:100%;padding:14px;background:#4a90d9;color:#fff;border:none;border-radius:10px;font-size:1.05em;font-weight:600;cursor:pointer}
+        .btn:disabled{background:#ccc}
+        .status{text-align:center;padding:10px;margin:12px 0;border-radius:8px;font-size:.9em;display:none}
+        .status.show{display:block}
+        .status.loading{background:#e6f7ff;color:#1890ff}
+        .status.success{background:#f6ffed;color:#52c41a}
+        .status.warn{background:#fffbe6;color:#faad14}
+        .result-card{display:none}
+        .result-card.show{display:block}
+        .result-img{width:100%;border-radius:8px;border:1px solid #eee;background:#fff}
+        .download-btn{display:block;width:100%;padding:12px;margin-top:10px;background:#52c41a;color:#fff;border:none;border-radius:10px;font-size:1em;font-weight:600;text-align:center;text-decoration:none}
+        .tips{font-size:.8em;color:#999;line-height:1.6}
+        .tips li{margin-bottom:2px}
+        #opencv-status{text-align:center;font-size:.8em;color:#aaa;margin-bottom:8px}
+        .spinner{display:inline-block;width:16px;height:16px;border:2px solid #1890ff;border-top-color:transparent;border-radius:50%;animation:spin .6s linear infinite;vertical-align:middle;margin-right:6px}
+        @keyframes spin{to{transform:rotate(360deg)}}
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>🪪 身份证照片处理</h1>
+    <p class="subtitle">上传正面和背面照片，自动处理生成 A4 打印图</p>
+    <div id="opencv-status">⏳ 正在加载处理引擎...</div>
+    <div class="card">
+        <h2>📤 正面照片（人像面）</h2>
+        <div class="upload-area" id="front-area" onclick="document.getElementById('front-input').click()">
+            <div class="icon">📷</div>
+            <div class="text">点击选择照片</div>
+            <input type="file" id="front-input" accept="image/jpeg,image/png,image/jpg" onchange="handleUpload(this,'front')">
+            <img class="preview" id="front-preview" style="display:none">
+        </div>
+    </div>
+    <div class="card">
+        <h2>📤 背面照片（国徽面）</h2>
+        <div class="upload-area" id="back-area" onclick="document.getElementById('back-input').click()">
+            <div class="icon">📷</div>
+            <div class="text">点击选择照片</div>
+            <input type="file" id="back-input" accept="image/jpeg,image/png,image/jpg" onchange="handleUpload(this,'back')">
+            <img class="preview" id="back-preview" style="display:none">
+        </div>
+    </div>
+    <button class="btn" id="process-btn" disabled onclick="processImages()">🚀 开始处理</button>
+    <div class="status" id="status-msg"></div>
+    <div class="card result-card" id="result-section">
+        <h2>📄 A4 拼接结果</h2>
+        <p style="font-size:.8em;color:#999;margin-bottom:8px">长按图片保存或点击下载</p>
+        <canvas id="result-canvas" class="result-img"></canvas>
+        <a class="download-btn" id="download-btn" download="身份证_A4.png">📥 下载 A4 图片</a>
+    </div>
+    <div class="card">
+        <h2>💡 拍照建议</h2>
+        <ul class="tips">
+            <li>• 将身份证放在深色或纯色背景上</li>
+            <li>• 确保光线均匀，避免反光和阴影</li>
+            <li>• 身份证完整出现在画面中</li>
+            <li>• 即使自动检测失败，也会用全图生成</li>
+        </ul>
+    </div>
+</div>
+
+<script async src="https://docs.opencv.org/4.9.0/opencv.js" onload="onOpenCVReady()"></script>
+<script>
+let frontData=null,backData=null,cvReady=false;
+
+function onOpenCVReady(){
+    if(typeof cv!=='undefined'){
+        const init=()=>{
+            cvReady=true;
+            document.getElementById('opencv-status').textContent='✅ 处理引擎已就绪';
+            document.getElementById('opencv-status').style.color='#52c41a';
+            checkReady();
+        };
+        if(cv.Mat) init(); else cv['onRuntimeInitialized']=init;
+    }
+}
+
+function handleUpload(input,side){
+    const file=input.files[0];
+    if(!file) return;
+    const reader=new FileReader();
+    reader.onload=e=>{
+        document.getElementById(side+'-preview').src=e.target.result;
+        document.getElementById(side+'-preview').style.display='block';
+        document.getElementById(side+'-area').classList.add('done');
+        if(side==='front') frontData=e.target.result; else backData=e.target.result;
+        checkReady();
+    };
+    reader.readAsDataURL(file);
+}
+
+function checkReady(){
+    document.getElementById('process-btn').disabled=!(cvReady&&frontData&&backData);
+}
+
+function showStatus(html,type){
+    const el=document.getElementById('status-msg');
+    el.innerHTML=html; el.className='status show '+type;
+}
+
+function loadImg(src){
+    return new Promise((ok,no)=>{const i=new Image();i.onload=()=>ok(i);i.onerror=no;i.src=src});
+}
+
+/* ========== 自动检测（宽松版） ========== */
+function orderPts(pts){
+    let s=pts.map(p=>p[0]+p[1]),d=pts.map(p=>p[0]-p[1]);
+    let r=[,,,];
+    r[0]=pts[s.indexOf(Math.min(...s))];
+    r[2]=pts[s.indexOf(Math.max(...s))];
+    r[1]=pts[d.indexOf(Math.max(...d))];
+    r[3]=pts[d.indexOf(Math.min(...d))];
+    return r;
+}
+
+function tryDetect(src){
+    let imgA=src.rows*src.cols, best=null, bestS=0;
+    const methods=[
+        // 自适应阈值
+        ()=>{let g=new cv.Mat();cv.cvtColor(src,g,cv.COLOR_RGBA2GRAY);let b=new cv.Mat();cv.adaptiveThreshold(g,b,255,cv.ADAPTIVE_THRESH_GAUSSIAN_C,cv.THRESH_BINARY_INV,15,5);let k=cv.getStructuringElement(cv.MORPH_RECT,new cv.Size(7,7));let m=new cv.Mat();cv.morphologyEx(b,m,cv.MORPH_CLOSE,k);g.delete();b.delete();k.delete();return m},
+        // Otsu
+        ()=>{let g=new cv.Mat();cv.cvtColor(src,g,cv.COLOR_RGBA2GRAY);let b=new cv.Mat();cv.threshold(g,b,0,255,cv.THRESH_BINARY_INV+cv.THRESH_OTSU);let k=cv.getStructuringElement(cv.MORPH_RECT,new cv.Size(7,7));let m=new cv.Mat();cv.morphologyEx(b,m,cv.MORPH_CLOSE,k);g.delete();b.delete();k.delete();return m},
+        // Canny
+        ()=>{let g=new cv.Mat();cv.cvtColor(src,g,cv.COLOR_RGBA2GRAY);let e=new cv.Mat();cv.Canny(g,e,30,100);let k=cv.getStructuringElement(cv.MORPH_RECT,new cv.Size(7,7));let m=new cv.Mat();cv.morphologyEx(e,m,cv.MORPH_CLOSE,k);g.delete();e.delete();k.delete();return m}
+    ];
+
+    for(let mk of methods){
+        let morphed=mk();
+        let contours=new cv.MatVector(),hier=new cv.Mat();
+        cv.findContours(morphed,contours,hier,cv.RETR_EXTERNAL,cv.CHAIN_APPROX_SIMPLE);
+        let cl=[];for(let i=0;i<contours.size();i++) cl.push({i,a:cv.contourArea(contours.get(i))});
+        cl.sort((a,b)=>b.a-a.a);
+        for(let item of cl.slice(0,15)){
+            let c=contours.get(item.i),area=item.a;
+            if(area<imgA*0.01||area>imgA*0.95) continue;
+            let peri=cv.arcLength(c,true);
+            for(let eps of [0.01,0.02,0.03,0.05,0.08]){
+                let ap=new cv.Mat();cv.approxPolyDP(c,ap,eps*peri,true);
+                if(ap.rows===4){
+                    let pts=[];for(let i=0;i<4;i++) pts.push([ap.data32S[i*2],ap.data32S[i*2+1]]);
+                    let o=orderPts(pts);
+                    let [tl,tr,br,bl]=o;
+                    let wt=Math.hypot(tr[0]-tl[0],tr[1]-tl[1]);
+                    let wb=Math.hypot(br[0]-bl[0],br[1]-bl[1]);
+                    let hl=Math.hypot(bl[0]-tl[0],bl[1]-tl[1]);
+                    let hr=Math.hypot(br[0]-tr[0],br[1]-tr[1]);
+                    let aw=(wt+wb)/2,ah=(hl+hr)/2;
+                    if(aw<20||ah<15) {ap.delete();continue}
+                    let ratio=aw/ah;
+                    if(ratio<1.0||ratio>3.0) {ap.delete();continue}
+                    let rs=1-Math.abs(ratio-1.585)/1.585;
+                    let as=Math.min(area/imgA,1);
+                    let sc=rs*0.5+as*0.5;
+                    if(sc>bestS){bestS=sc;best=o}
+                }
+                ap.delete();
+            }
+        }
+        contours.delete();hier.delete();morphed.delete();
+    }
+    return best;
+}
+
+function warpPerspective(src,corners){
+    let [tl,tr,br,bl]=corners;
+    let wt=Math.hypot(tr[0]-tl[0],tr[1]-tl[1]);
+    let wb=Math.hypot(br[0]-bl[0],br[1]-bl[1]);
+    let mw=Math.max(Math.round(wt),Math.round(wb));
+    let hl=Math.hypot(bl[0]-tl[0],bl[1]-tl[1]);
+    let hr=Math.hypot(br[0]-tr[0],br[1]-tr[1]);
+    let mh=Math.max(Math.round(hl),Math.round(hr));
+    let tr2=85.6/54,cr=mw/mh;
+    if(cr>tr2) mh=Math.round(mw/tr2); else mw=Math.round(mh*tr2);
+    let s=cv.matFromArray(4,1,cv.CV_32FC2,[tl[0],tl[1],tr[0],tr[1],br[0],br[1],bl[0],bl[1]]);
+    let d=cv.matFromArray(4,1,cv.CV_32FC2,[0,0,mw-1,0,mw-1,mh-1,0,mh-1]);
+    let M=cv.getPerspectiveTransform(s,d);
+    let out=new cv.Mat();cv.warpPerspective(src,out,M,new cv.Size(mw,mh));
+    s.delete();d.delete();M.delete();return out;
+}
+
+/* ========== 主流程 ========== */
+async function processImages(){
+    if(!cvReady||!frontData||!backData) return;
+    const btn=document.getElementById('process-btn');
+    btn.disabled=true;
+    showStatus('<span class="spinner"></span>正在处理...','loading');
+
+    try{
+        await new Promise(r=>setTimeout(r,50));
+
+        let fi=await loadImg(frontData);
+        let bi=await loadImg(backData);
+        let fs=cv.imread(fi);
+        let bs=cv.imread(bi);
+
+        // 尝试检测正面
+        showStatus('<span class="spinner"></span>正在检测正面...','loading');
+        await new Promise(r=>setTimeout(r,30));
+        let fc=tryDetect(fs);
+        let frontResult;
+        if(fc){
+            frontResult=warpPerspective(fs,fc);
+        } else {
+            frontResult=fs.clone();
+        }
+
+        // 尝试检测背面
+        showStatus('<span class="spinner"></span>正在检测背面...','loading');
+        await new Promise(r=>setTimeout(r,30));
+        let bc=tryDetect(bs);
+        let backResult;
+        if(bc){
+            backResult=warpPerspective(bs,bc);
+        } else {
+            backResult=bs.clone();
+        }
+
+        // 拼接 A4
+        showStatus('<span class="spinner"></span>正在生成 A4 图片...','loading');
+        await new Promise(r=>setTimeout(r,30));
+
+        let a4W=1240,a4H=1754,cardW=506,cardH=319,gap=118;
+        let a4=new cv.Mat(a4H,a4W,cv.CV_8UC3,new cv.Scalar(255,255,255));
+        let fr=new cv.Mat(),br2=new cv.Mat();
+        cv.resize(frontResult,fr,new cv.Size(cardW,cardH),0,0,cv.INTER_LINEAR);
+        cv.resize(backResult,br2,new cv.Size(cardW,cardH),0,0,cv.INTER_LINEAR);
+        let totalH=cardH*2+gap;
+        let sy=Math.round((a4H-totalH)/2);
+        let sx=Math.round((a4W-cardW)/2);
+        let roi1=a4.roi(new cv.Rect(sx,sy,cardW,cardH));fr.copyTo(roi1);
+        let roi2=a4.roi(new cv.Rect(sx,sy+cardH+gap,cardW,cardH));br2.copyTo(roi2);
+
+        // 绘制到 canvas
+        let tc=document.createElement('canvas');
+        tc.width=a4.cols;tc.height=a4.rows;
+        cv.imshow(tc,a4);
+        let canvas=document.getElementById('result-canvas');
+        canvas.width=a4.cols;canvas.height=a4.rows;
+        let ctx=canvas.getContext('2d');
+        ctx.drawImage(tc,0,0);
+        tc.remove();
+
+        let url=canvas.toDataURL('image/png');
+        document.getElementById('download-btn').href=url;
+        document.getElementById('result-section').classList.add('show');
+
+        let msg='✅ 处理成功！';
+        if(!fc||!bc) msg='<span class="spinner"></span>⚠️ 部分照片未检测到身份证，已使用全图。建议拍照时将身份证放在深色背景上。';
+        showStatus(msg,!fc||!bc?'warn':'success');
+
+        fs.delete();bs.delete();frontResult.delete();backResult.delete();
+        a4.delete();fr.delete();br2.delete();
+    }catch(e){
+        showStatus('❌ 处理出错：'+e.message,'loading');
+    }finally{
+        btn.disabled=false;
+    }
+}
+</script>
+</body>
+</html>
