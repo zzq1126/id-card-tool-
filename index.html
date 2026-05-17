@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>身份证照片处理工具</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #f0f2f5;
+            color: #333;
+            min-height: 100vh;
+            padding: 16px;
+        }
+        .container { max-width: 600px; margin: 0 auto; }
+        h1 { text-align: center; font-size: 1.4em; margin: 12px 0 4px; }
+        .subtitle { text-align: center; color: #888; font-size: 0.85em; margin-bottom: 16px; }
+        .card {
+            background: #fff;
+            border-radius: 12px;
+            padding: 16px;
+            margin-bottom: 12px;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+        }
+        .card h2 { font-size: 1em; margin-bottom: 12px; color: #555; }
+        .upload-area {
+            border: 2px dashed #ccc;
+            border-radius: 10px;
+            padding: 24px 16px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .upload-area:active { border-color: #4a90d9; background: #f8faff; }
+        .upload-area input { display: none; }
+        .upload-area .icon { font-size: 2em; margin-bottom: 6px; }
+        .upload-area .text { color: #888; font-size: 0.9em; }
+        .upload-area .preview { max-width: 100%; max-height: 200px; border-radius: 6px; margin-top: 8px; }
+        .upload-area.done { border-color: #52c41a; border-style: solid; }
+        .btn {
+            display: block; width: 100%; padding: 14px;
+            background: #4a90d9; color: #fff; border: none;
+            border-radius: 10px; font-size: 1.05em; font-weight: 600;
+            cursor: pointer;
+        }
+        .btn:disabled { background: #ccc; }
+        .status {
+            text-align: center; padding: 10px; margin: 12px 0;
+            border-radius: 8px; font-size: 0.9em; display: none;
+        }
+        .status.show { display: block; }
+        .status.loading { background: #e6f7ff; color: #1890ff; }
+        .status.success { background: #f6ffed; color: #52c41a; }
+        .status.error { background: #fff2f0; color: #ff4d4f; }
+        .result-card { display: none; }
+        .result-card.show { display: block; }
+        .result-img { width: 100%; border-radius: 8px; border: 1px solid #eee; background: #fff; }
+        .download-btn {
+            display: block; width: 100%; padding: 12px; margin-top: 10px;
+            background: #52c41a; color: #fff; border: none;
+            border-radius: 10px; font-size: 1em; font-weight: 600;
+            text-align: center; text-decoration: none;
+        }
+        .tips { font-size: 0.8em; color: #999; line-height: 1.6; }
+        .tips li { margin-bottom: 2px; }
+        #opencv-status {
+            text-align: center; font-size: 0.8em; color: #aaa; margin-bottom: 8px;
+        }
+        .loading-spinner {
+            display: inline-block; width: 16px; height: 16px;
+            border: 2px solid #1890ff; border-top-color: transparent;
+            border-radius: 50%; animation: spin 0.6s linear infinite;
+            vertical-align: middle; margin-right: 6px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🪪 身份证照片处理</h1>
+        <p class="subtitle">上传正面和背面照片，自动抠图校正，生成 A4 打印图</p>
+
+        <div id="opencv-status">⏳ 正在加载处理引擎...</div>
+
+        <div class="card">
+            <h2>📤 正面照片（人像面）</h2>
+            <div class="upload-area" id="front-area" onclick="document.getElementById('front-input').click()">
+                <div class="icon">📷</div>
+                <div class="text">点击选择照片</div>
+                <input type="file" id="front-input" accept="image/jpeg,image/png,image/jpg" onchange="handleUpload(this, 'front')">
+                <img class="preview" id="front-preview" style="display:none">
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>📤 背面照片（国徽面）</h2>
+            <div class="upload-area" id="back-area" onclick="document.getElementById('back-input').click()">
+                <div class="icon">📷</div>
+                <div class="text">点击选择照片</div>
+                <input type="file" id="back-input" accept="image/jpeg,image/png,image/jpg" onchange="handleUpload(this, 'back')">
+                <img class="preview" id="back-preview" style="display:none">
+            </div>
+        </div>
+
+        <button class="btn" id="process-btn" disabled onclick="processImages()">🚀 开始处理</button>
+
+        <div class="status" id="status-msg"></div>
+
+        <div class="card result-card" id="result-section">
+            <h2>📄 A4 拼接结果</h2>
+            <p style="font-size:0.8em;color:#999;margin-bottom:8px;">长按图片保存或点击下载</p>
+            <canvas id="result-canvas" class="result-img"></canvas>
+            <a class="download-btn" id="download-btn" download="身份证_A4.png">📥 下载 A4 图片</a>
+        </div>
+
+        <div class="card">
+            <h2>💡 拍照建议</h2>
+            <ul class="tips">
+                <li>• 将身份证放在深色或纯色背景上</li>
+                <li>• 确保光线均匀，避免反光和阴影</li>
+                <li>• 身份证完整出现在画面中，边缘清晰</li>
+            </ul>
+        </div>
+    </div>
+
+    <script async src="https://docs.opencv.org/4.9.0/opencv.js" onload="onOpenCVReady()"></script>
+    <script>
+        let frontImageData = null;
+        let backImageData = null;
+        let cvReady = false;
+
+        function onOpenCVReady() {
+            if (typeof cv !== 'undefined') {
+                if (cv.Mat) {
+                    cvReady = true;
+                    document.getElementById('opencv-status').textContent = '✅ 处理引擎已就绪';
+                    document.getElementById('opencv-status').style.color = '#52c41a';
+                    checkReady();
+                } else {
+                    cv['onRuntimeInitialized'] = () => {
+                        cvReady = true;
+                        document.getElementById('opencv-status').textContent = '✅ 处理引擎已就绪';
+                        document.getElementById('opencv-status').style.color = '#52c41a';
+                        checkReady();
+                    };
+                }
+            }
+        }
+
+        function handleUpload(input, side) {
+            const file = input.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const img = document.getElementById(side + '-preview');
+                img.src = e.target.result;
+                img.style.display = 'block';
+                document.getElementById(side + '-area').classList.add('done');
+
+                if (side === 'front') frontImageData = e.target.result;
+                else backImageData = e.target.result;
+
+                checkReady();
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function checkReady() {
+            document.getElementById('process-btn').disabled = !(cvReady && frontImageData && backImageData);
+        }
+
+        function showStatus(msg, type) {
+            const el = document.getElementById('status-msg');
+            el.innerHTML = msg;
+            el.className = 'status show ' + type;
+        }
+
+        function loadImage(src) {
+            return new Promise((resolve, reject) => {
+                const img = new Image();
+                img.onload = () => resolve(img);
+                img.onerror = reject;
+                img.src = src;
+            });
+        }
+
+        function orderPoints(pts) {
+            let s = pts.map(p => p[0] + p[1]);
+            let d = pts.map(p => p[0] - p[1]);
+            let result = new Array(4);
+            result[0] = pts[s.indexOf(Math.min(...s))];
+            result[2] = pts[s.indexOf(Math.max(...s))];
+            result[1] = pts[d.indexOf(Math.max(...d))];
+            result[3] = pts[d.indexOf(Math.min(...d))];
+            return result;
+        }
+
+        function detectIDCard(src) {
+            let gray = new cv.Mat();
+            cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+
+            let blurred = new cv.Mat();
+            cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
+
+            let binary = new cv.Mat();
+            cv.adaptiveThreshold(blurred, binary, 255,
+                cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 11, 2);
+
+            let kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(9, 9));
+            let morphed = new cv.Mat();
+            cv.morphologyEx(binary, morphed, cv.MORPH_CLOSE, kernel, new cv.Point(-1, -1), 3);
+            cv.morphologyEx(morphed, morphed, cv.MORPH_DILATE, kernel, new cv.Point(-1, -1), 1);
+
+            let contours = new cv.MatVector();
+            let hierarchy = new cv.Mat();
+            cv.findContours(morphed, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+            let imgArea = src.rows * src.cols;
+            let bestContour = null;
+            let bestScore = 0;
+
+            let contourList = [];
+            for (let i = 0; i < contours.size(); i++) {
+                contourList.push({ idx: i, area: cv.contourArea(contours.get(i)) });
+            }
+            contourList.sort((a, b) => b.area - a.area);
+            let topContours = contourList.slice(0, Math.min(10, contourList.length));
+
+            for (let item of topContours) {
+                let contour = contours.get(item.idx);
+                let area = item.area;
+
+                if (area < imgArea * 0.05 || area > imgArea * 0.80) continue;
+
+                let peri = cv.arcLength(contour, true);
+                let approx = new cv.Mat();
+                cv.approxPolyDP(contour, approx, 0.02 * peri, true);
+
+                if (approx.rows !== 4) { approx.delete(); continue; }
+
+                let pts = [];
+                for (let i = 0; i < 4; i++) {
+                    pts.push([approx.data32S[i * 2], approx.data32S[i * 2 + 1]]);
+                }
+
+                let ordered = orderPoints(pts);
+                let [tl, tr, br, bl] = ordered;
+
+                let widthTop = Math.sqrt((tr[0]-tl[0])**2 + (tr[1]-tl[1])**2);
+                let widthBottom = Math.sqrt((br[0]-bl[0])**2 + (br[1]-bl[1])**2);
+                let heightLeft = Math.sqrt((bl[0]-tl[0])**2 + (bl[1]-tl[1])**2);
+                let heightRight = Math.sqrt((br[0]-tr[0])**2 + (br[1]-tr[1])**2);
+
+                let avgW = (widthTop + widthBottom) / 2;
+                let avgH = (heightLeft + heightRight) / 2;
+
+                if (avgW < 1 || avgH < 1) { approx.delete(); continue; }
+
+                let ratio = avgW / avgH;
+                if (ratio < 1.3 || ratio > 2.0) { approx.delete(); continue; }
+
+                let ratioScore = 1.0 - Math.abs(ratio - 1.585) / 1.585;
+                let areaScore = area / imgArea;
+                let score = ratioScore * 0.7 + areaScore * 0.3;
+
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestContour = ordered;
+                }
+                approx.delete();
+            }
+
+            gray.delete(); blurred.delete(); binary.delete();
+            morphed.delete(); kernel.delete();
+            contours.delete(); hierarchy.delete();
+
+            return bestContour;
+        }
+
+        function perspectiveCorrect(src, corners) {
+            let [tl, tr, br, bl] = corners;
+
+            let widthTop = Math.sqrt((tr[0]-tl[0])**2 + (tr[1]-tl[1])**2);
+            let widthBottom = Math.sqrt((br[0]-bl[0])**2 + (br[1]-bl[1])**2);
+            let maxWidth = Math.max(Math.round(widthTop), Math.round(widthBottom));
+
+            let heightLeft = Math.sqrt((bl[0]-tl[0])**2 + (bl[1]-tl[1])**2);
+            let heightRight = Math.sqrt((br[0]-tr[0])**2 + (br[1]-tr[1])**2);
+            let maxHeight = Math.max(Math.round(heightLeft), Math.round(heightRight));
+
+            let targetRatio = 85.6 / 54.0;
+            let currentRatio = maxWidth / maxHeight;
+            if (currentRatio > targetRatio) {
+                maxHeight = Math.round(maxWidth / targetRatio);
+            } else {
+                maxWidth = Math.round(maxHeight * targetRatio);
+            }
+
+            let srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
+                tl[0], tl[1], tr[0], tr[1], br[0], br[1], bl[0], bl[1]
+            ]);
+            let dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
+                0, 0, maxWidth - 1, 0, maxWidth - 1, maxHeight - 1, 0, maxHeight - 1
+            ]);
+
+            let M = cv.getPerspectiveTransform(srcTri, dstTri);
+            let dst = new cv.Mat();
+            cv.warpPerspective(src, dst, M, new cv.Size(maxWidth, maxHeight));
+
+            srcTri.delete(); dstTri.delete(); M.delete();
+            return dst;
+        }
+
+        function createA4(frontMat, backMat) {
+            let a4W = 827, a4H = 1169;
+            let cardW = 337, cardH = 213;
+            let gap = 79;
+
+            let a4 = new cv.Mat(a4H, a4W, cv.CV_8UC3, new cv.Scalar(255, 255, 255));
+
+            let frontResized = new cv.Mat();
+            cv.resize(frontMat, frontResized, new cv.Size(cardW, cardH), 0, 0, cv.INTER_LINEAR);
+
+            let backResized = new cv.Mat();
+            cv.resize(backMat, backResized, new cv.Size(cardW, cardH), 0, 0, cv.INTER_LINEAR);
+
+            let totalH = cardH * 2 + gap;
+            let startY = Math.round((a4H - totalH) / 2);
+            let startX = Math.round((a4W - cardW) / 2);
+
+            let frontROI = a4.roi(new cv.Rect(startX, startY, cardW, cardH));
+            frontResized.copyTo(frontROI);
+
+            let backY = startY + cardH + gap;
+            let backROI = a4.roi(new cv.Rect(startX, backY, cardW, cardH));
+            backResized.copyTo(backROI);
+
+            frontResized.delete(); backResized.delete();
+            return a4;
+        }
+
+        async function processImages() {
+            if (!cvReady || !frontImageData || !backImageData) return;
+
+            const btn = document.getElementById('process-btn');
+            btn.disabled = true;
+            showStatus('<span class="loading-spinner"></span>正在处理...', 'loading');
+
+            try {
+                await new Promise(r => setTimeout(r, 100));
+
+                let frontImg = await loadImage(frontImageData);
+                let backImg = await loadImage(backImageData);
+
+                let frontSrc = cv.imread(frontImg);
+                let backSrc = cv.imread(backImg);
+
+                let frontCorners = detectIDCard(frontSrc);
+                if (!frontCorners) {
+                    throw new Error('未能检测到正面身份证，请确保身份证清晰完整');
+                }
+                let frontWarped = perspectiveCorrect(frontSrc, frontCorners);
+
+                let backCorners = detectIDCard(backSrc);
+                if (!backCorners) {
+                    throw new Error('未能检测到背面身份证，请确保身份证清晰完整');
+                }
+                let backWarped = perspectiveCorrect(backSrc, backCorners);
+
+                let a4 = createA4(frontWarped, backWarped);
+
+                let canvas = document.getElementById('result-canvas');
+                canvas.width = a4.cols;
+                canvas.height = a4.rows;
+
+                let tempCanvas = document.createElement('canvas');
+                tempCanvas.width = a4.cols;
+                tempCanvas.height = a4.rows;
+                cv.imshow(tempCanvas, a4);
+
+                let ctx = canvas.getContext('2d');
+                ctx.drawImage(tempCanvas, 0, 0);
+                tempCanvas.remove();
+
+                let dataURL = canvas.toDataURL('image/png');
+                document.getElementById('download-btn').href = dataURL;
+
+                document.getElementById('result-section').classListListener('show');
+                showStatus('✅ 处理成功！可长按图片保存或点击按钮下载', 'success');
+
+                frontSrc.delete(); backSrc.delete();
+                frontWarped.delete(); backWarped.delete();
+                a4.delete();
+
+            } catch (err) {
+                showStatus('❌ ' + err.message, 'error');
+            } finally {
+                btn.disabled = false;
+            }
+        }
+    </script>
+</body>
+</html>
